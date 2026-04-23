@@ -8,14 +8,23 @@ def get_window_geometry(window_name):
     output = subprocess.check_output(["wmctrl", "-lG"]).decode()
 
     for line in output.splitlines():
-        if window_name in line:
+        if window_name.lower() in line.lower():
             parts = line.split()
-            return {
-                "left": int(parts[2]),
-                "top": int(parts[3]),
-                "width": int(parts[4]),
-                "height": int(parts[5])
-            }
+
+            x = int(parts[2])
+            y = int(parts[3])
+            w = int(parts[4])
+            h = int(parts[5])
+
+            # Evitar valores inválidos
+            if w > 0 and h > 0:
+                return {
+                    "left": x,
+                    "top": y,
+                    "width": w,
+                    "height": h
+                }
+
     return None
 
 
