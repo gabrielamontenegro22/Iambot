@@ -2,5 +2,7 @@
 opencv-python
 numpy
 mss
-pyautogui
 pynput
+scipy
+ncnn          # Para inferencia rápida en ARM. Si falla en pip, usar:
+              # pip install ncnn-bin    o seguir guía oficial Ultralytics.

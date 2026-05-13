@@ -8,6 +8,11 @@ MAX_TRACKERS = 40
 
 
 class KalmanTracker:
+    """
+    Single-target Kalman filter tracker.
+    State: [cx, cy, vx, vy]  con velocidad en px/segundo (dt variable).
+    """
+
     _id_counter = 0
 
     @classmethod
@@ -37,6 +42,7 @@ class KalmanTracker:
         self.R = np.eye(2, dtype=np.float32) * 0.5
 
     def predict(self, dt):
+        """Avanza el estado dt segundos en el futuro."""
         F = np.array([
             [1, 0, dt, 0],
             [0, 1, 0,  dt],
@@ -64,6 +70,7 @@ class KalmanTracker:
         self.confirmed    = True
 
     def predict_future(self, lead_seconds):
+        """(x, y) extrapolado sin modificar estado interno."""
         cx, cy, vx, vy = self.state
         return (int(cx + vx * lead_seconds),
                 int(cy + vy * lead_seconds))
@@ -100,6 +107,7 @@ def _iou(b1, b2):
 
 
 def _hybrid_cost(t_bbox, t_pos, d, max_dist=250.0, alpha=0.4):
+    """Combined cost = alpha*(1-IoU) + (1-alpha)*norm_distance"""
     iou    = _iou(t_bbox, (
         d['x'] - d['w'] // 2, d['y'] - d['h'] // 2,
         d['x'] + d['w'] // 2, d['y'] + d['h'] // 2,
@@ -114,7 +122,14 @@ def _hybrid_cost(t_bbox, t_pos, d, max_dist=250.0, alpha=0.4):
 # ═══════════════════════════════════════════════════════════════════
 
 class MultiTracker:
-   
+    """
+    Predict en cada iteración del loop (con dt real), update solo cuando
+    llegan detecciones nuevas.
+
+    Salvaguardas anti-explosión de IDs:
+      - MAX_TRACKERS: límite duro de trackers simultáneos.
+      - Warning si se llega al límite (suele indicar bboxes en escala mala).
+    """
 
     def __init__(self, iou_threshold=0.25, max_dist=250, max_lost=8):
         self.trackers      = []
@@ -180,6 +195,7 @@ class MultiTracker:
         return self.active_targets()
 
     def _add_new_trackers(self, detections):
+        """Crea trackers nuevos respetando MAX_TRACKERS."""
         room = MAX_TRACKERS - len(self.trackers)
         if room <= 0:
             if not self._warned_limit:

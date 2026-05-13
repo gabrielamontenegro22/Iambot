@@ -1,3 +1,25 @@
+"""
+Sistema de aprendizaje adaptativo basado en detección visual de muerte.
+
+CÓMO DETECTA UN HIT:
+  Tras un disparo, se guarda un "patch" del frame en la posición del target
+  (el recorte del pato). Durante HIT_GRACE_PERIOD se compara:
+
+    A) ¿Bajó la confianza de YOLO sobre ese target?      (modelo "duda")
+    B) ¿Cambió mucho el color promedio del patch?        (animación de muerte)
+    C) ¿Desapareció del tracker?                         (señal clásica)
+
+  Si A, B o C cumplen sus umbrales → HIT.
+  Si pasa el grace period sin que ninguna se cumpla → MISS.
+
+QUÉ APRENDE:
+  Solo ajusta TARGET_COOLDOWN. Si la tasa de hits es baja,
+  posiblemente el cooldown es muy corto (le pega al mismo pato
+  antes de que YOLO se entere) o muy largo (deja escapar patos).
+
+PERSISTENCIA:
+  Estado en JSON, escritura atómica, recargable entre sesiones.
+"""
 
 import json
 import os
@@ -8,8 +30,17 @@ from collections import deque
 import numpy as np
 import cv2
 
-def _extract_patch(frame, bbox, padding=4):
 
+# ════════════════════════════════════════════════════════════════════
+# Captura del "antes" — patch visual de un target
+# ════════════════════════════════════════════════════════════════════
+
+def _extract_patch(frame, bbox, padding=4):
+    """
+    Recorta el bbox del frame con un padding pequeño.
+    bbox en coords del frame (mismo espacio que YOLO procesa).
+    Devuelve un ndarray BGR pequeño, o None si bbox inválido.
+    """
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = bbox
     x1 = max(0, int(x1) - padding)
@@ -22,7 +53,11 @@ def _extract_patch(frame, bbox, padding=4):
 
 
 def _patch_signature(patch):
-
+    """
+    Resume un patch en un vector pequeño para comparar 'antes' vs 'después'.
+    Usamos el color promedio en HSV — invariante a cambios pequeños de
+    iluminación pero sensible a cambios grandes de color (animación de muerte).
+    """
     if patch is None or patch.size == 0:
         return None
     # Reducir antes de pasar a HSV para acelerar
@@ -33,7 +68,10 @@ def _patch_signature(patch):
 
 
 def _signatures_distance(sig_a, sig_b):
-
+    """
+    Distancia entre dos firmas. Tratamos H (matiz) circular en [0, 180]
+    porque el espacio HSV de OpenCV usa ese rango.
+    """
     if sig_a is None or sig_b is None:
         return 0.0
     h_diff = abs(sig_a[0] - sig_b[0])
@@ -49,6 +87,14 @@ def _signatures_distance(sig_a, sig_b):
 # ════════════════════════════════════════════════════════════════════
 
 class AdaptiveLearner:
+    """
+    Aprende ajustando solo TARGET_COOLDOWN basado en tasa de hits.
+
+    Hits detectados por:
+      - Cambio de color del patch del target (animación de muerte)
+      - Caída de confidence del modelo
+      - Desaparición del tracker
+    """
 
     def __init__(
         self,
@@ -109,7 +155,13 @@ class AdaptiveLearner:
         return self.cooldown_s
 
     def register_shot(self, target_id, target_bbox, target_conf, frame, now):
+        """
+        Llamar JUSTO después de cada click.
 
+        target_bbox: (x1,y1,x2,y2) en coords del FRAME (espacio YOLO).
+        target_conf: confidence YOLO del target en su última detección.
+        frame:       frame BGR actual (mismo que pasaste a YOLO).
+        """
         patch = _extract_patch(frame, target_bbox)
         sig   = _patch_signature(patch)
 
@@ -122,7 +174,15 @@ class AdaptiveLearner:
         self.total_shots += 1
 
     def evaluate_pending(self, active_targets_info, frame, now):
+        """
+        Llamar tras cada update del tracker.
 
+        active_targets_info: dict {target_id: {"bbox": (..), "conf": float}}
+                             con la info más reciente de cada target vivo.
+        frame:               frame BGR más reciente.
+
+        Evalúa los pending shots cuyo grace_period haya vencido.
+        """
         if not self.shots_pending:
             return 0
 
@@ -156,7 +216,7 @@ class AdaptiveLearner:
         return evaluated
 
     def update(self, now):
-      
+        """Llamar periódicamente para que ajuste el cooldown."""
         if now - self._last_change_time < self._evaluation_period:
             return
         if len(self.results) < 5:
@@ -214,7 +274,10 @@ class AdaptiveLearner:
     # ════════════════════════════════════════════════════════════════
 
     def _check_hit_signals(self, shot, active_targets_info, frame):
-
+        """
+        Devuelve "color" / "conf" / "vanish" si hay señal de hit;
+        None si aún no hay evidencia.
+        """
         tid = shot["target_id"]
 
         # Señal C: target desapareció del tracker
