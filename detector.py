@@ -16,21 +16,6 @@ def _detect_format(path):
 
 
 class Detector:
-    """
-    Detector con MODO DIAGNÓSTICO activado.
-
-    Imprime al arrancar:
-      - Qué formato detectó del modelo
-      - Cuántas clases tiene el modelo (un modelo entrenado solo para patos
-        debería tener 1 clase, no 80 como COCO)
-
-    Y cada 30 detecciones imprime:
-      - Cuántas detecciones por frame
-      - Rango de coordenadas (debería estar dentro de RESIZE_WIDTH)
-      - Rango de confianza
-      - Qué clases salieron
-    """
-
     def __init__(self):
         fmt = _detect_format(config.MODEL_PATH)
 

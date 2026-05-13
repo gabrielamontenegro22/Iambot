@@ -1,10 +1,6 @@
 WINDOW_NAME = ""
 
-# Área del juego dentro de la ventana.
-# None = usar la ventana completa.
-# Formato: (offset_x, offset_y, width, height) en px relativos a la ventana.
 GAME_ZONE = None
-
 # Modelo. IMPORTANTE en Raspberry Pi:
 #   - El formato .pt (PyTorch) funciona pero es LENTO en ARM.
 #   - NCNN es ~2-4x más rápido en Raspberry Pi (recomendación oficial Ultralytics).
@@ -14,20 +10,9 @@ MODEL_PATH = "models/duck_ncnn_model"   # cambia a "models/duck.pt" si aún no e
 
 CONFIDENCE_THRESHOLD = 0.35
 
-# ═══════════════════════════════════════════════════════════════════
-# DISPAROS POR OBJETIVO
-# ═══════════════════════════════════════════════════════════════════
-
-# Cuántas veces disparar a cada objetivo único antes de pasar al siguiente.
-# 1 = comportamiento clásico (un click por objetivo).
-# 2+ = ráfaga sobre el mismo target.
-SHOTS_PER_TARGET = 1
-
-# Delay (segundos) entre disparos consecutivos al MISMO objetivo (ráfaga).
-SHOT_BURST_DELAY = 0.04
-
-# Delay (segundos) entre cambiar de un objetivo a otro distinto.
-CLICK_DELAY = 0.05
+SHOTS_PER_TARGET = 1 # Delay (segundos) entre disparos consecutivos al MISMO objetivo (ráfaga).
+SHOT_BURST_DELAY = 0.4 # Delay (segundos) entre cambiar de un objetivo a otro distinto.
+CLICK_DELAY = 0.2
 
 # Si un mismo target_id sobrevive entre clicks, identificar el "mismo objetivo"
 # por ID del tracker (True) o por distancia (False).
@@ -42,13 +27,6 @@ SAME_TARGET_RADIUS = 60
 # Si solo queda un target en pantalla, espera este tiempo y vuelve a tirarle.
 TARGET_COOLDOWN = 0.4
 
-# ═══════════════════════════════════════════════════════════════════
-# DEBUG / RENDIMIENTO
-# ═══════════════════════════════════════════════════════════════════
-
-# ⚠️  En Raspberry Pi, cv2.imshow consume mucha CPU.
-# True  -> ventana de debug visible (solo para PC potente / pruebas).
-# False -> sin ventana, máximo rendimiento. RECOMENDADO en Pi.
 DEBUG        = True
 DEBUG_WIDTH  = 640
 DEBUG_HEIGHT = 480

@@ -1,17 +1,3 @@
-"""
-Script de diagnóstico de rendimiento.
-
-Mide y reporta:
-  - Servidor de display detectado (Wayland vs X11)  ← CRÍTICO en Pi 5
-  - Tiempo de UNA captura mss
-  - Tiempo de UNA inferencia YOLO
-  - Throughput sostenido en bucle (capture+YOLO simulado)
-  - Memoria libre, temperatura CPU, throttling
-
-Ejecutar ANTES de reportar problemas de rendimiento:
-    python3 diagnose.py
-"""
-
 import os
 import sys
 import time

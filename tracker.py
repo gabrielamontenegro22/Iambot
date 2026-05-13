@@ -1,18 +1,10 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-
-# Límite máximo de trackers vivos al mismo tiempo (salvaguarda anti-explosión).
-# En la práctica nunca debería haber más de ~20 objetos en pantalla.
 MAX_TRACKERS = 40
 
 
 class KalmanTracker:
-    """
-    Single-target Kalman filter tracker.
-    State: [cx, cy, vx, vy]  con velocidad en px/segundo (dt variable).
-    """
-
     _id_counter = 0
 
     @classmethod

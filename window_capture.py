@@ -1,18 +1,3 @@
-"""
-Captura de ventana con thread asíncrono.
-
-El problema en Raspberry Pi: mss/XGetImage hace copia GPU→CPU que en ARM
-puede tardar 100-300ms POR CAPTURA. Si el main loop hace todo en serie
-(captura → YOLO → click), el lag se acumula.
-
-Solución: thread dedicado que captura en bucle al ritmo más rápido
-posible y guarda solo el ÚLTIMO frame. El main loop pide grab() y
-recibe el frame más reciente disponible sin bloquear.
-
-Esto convierte la latencia de "captura + YOLO + click" en "max(captura, YOLO+click)".
-En Pi típicamente reduce el lag percibido de ~1500ms a ~150ms.
-"""
-
 import subprocess
 import threading
 import time
