@@ -1,2 +1,12 @@
-venv
-datasets
+__pycache__/
+*.pyc
+venv/
+.venv/
+runs/
+*.log
+learning_state.json
+.vscode/
+.idea/
+pyrightconfig.json
+.claude/
+Thumbs.db

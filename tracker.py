@@ -138,7 +138,10 @@ class MultiTracker:
         if not detections:
             for t in self.trackers:
                 t.lost_frames += 1
-                t.hit_streak   = 0
+                # NO resetear hit_streak — preservamos el conteo de detecciones
+                # historicas para que el filtro de velocidad pueda aplicar.
+                # Antes: t.hit_streak = 0 → blobs estaticos quedaban en hits=0
+                # siempre, bypaseando HIT_STREAK_GRACE.
             self._prune()
             return self.active_targets()
 
@@ -175,7 +178,7 @@ class MultiTracker:
         for i, t in enumerate(self.trackers):
             if i not in matched_t:
                 t.lost_frames += 1
-                t.hit_streak   = 0
+                # NO resetear hit_streak — ver comentario en bloque superior.
 
         unmatched_detections = [
             detections[j] for j in range(len(detections))

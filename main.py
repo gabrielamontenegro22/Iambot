@@ -10,6 +10,11 @@ from mouse_controller import move_and_click
 from utils import draw_detections
 
 
+#cd Aimbot
+#export TCL_LIBRARY="/c/Users/gabri_qm076gc/AppData/Local/Programs/Python/Python313/tcl/tcl8.6"
+#export TK_LIBRARY="/c/Users/gabri_qm076gc/AppData/Local/Programs/Python/Python313/tcl/tk8.6"
+#python app.py
+
 # ═══════════════════════════════════════════════════════════════════
 # SELECCIÓN DE OBJETIVO
 # ═══════════════════════════════════════════════════════════════════
@@ -80,22 +85,48 @@ class BurstState:
         self.shots_fired  = 0
 
 
+MIN_VELOCITY_PX_S = 35     # Subido de 10 → 35 para filtrar perro caminando (5-20 px/s)
+                           # y jitter de pixeles del HUD. Patos reales vuelan a 50-200 px/s,
+                           # pasan sin problema.
+HIT_STREAK_GRACE  = 0      # SIN grace. Todo tracker debe demostrar velocidad antes de
+                           # ser disparado. Patos reales: Kalman calcula velocidad despues
+                           # de 1-2 updates → pasan filtro. Blobs estaticos (iconos HUD,
+                           # contador de patos, perro caminando) nunca alcanzan 35 px/s.
+
+
+def _is_moving(target):
+    """
+    Filtra trackers estacionarios (probablemente árbol/score/objetos estáticos).
+    Trackers nuevos (hit_streak < 4) reciben el beneficio de la duda porque
+    la velocidad Kalman aún no convergió.
+    """
+    if target.hit_streak < HIT_STREAK_GRACE:
+        return True
+    vx, vy = target.velocity
+    return (vx * vx + vy * vy) >= MIN_VELOCITY_PX_S ** 2
+
+
 def _pick_target_for_burst(active, burst, last_click_pos,
                            recently_shot, now, cooldown):
     """
-    Selección de target con dos reglas:
+    Selección de target con tres reglas:
 
-    1. RÁFAGA ACTIVA: si SHOTS_PER_TARGET > 1 y hay una ráfaga en curso,
+    1. SOLO LO QUE SE MUEVE: targets con velocidad ~0 son ignorados (árbol).
+    2. RÁFAGA ACTIVA: si SHOTS_PER_TARGET > 1 y hay una ráfaga en curso,
        seguir disparando al mismo target hasta completar.
-
-    2. EVITAR REPETIR: targets a los que se les disparó hace menos de
+    3. EVITAR REPETIR: targets a los que se les disparó hace menos de
        `cooldown` segundos quedan EXCLUIDOS de la selección.
        Solo si TODOS los targets están en cooldown, se permite repetir.
     """
     if not active:
         return None
 
-    # Caso 1: ráfaga activa sin completar
+    # Caso 1: filtrar estacionarios — el árbol nunca se dispara
+    active = [t for t in active if _is_moving(t)]
+    if not active:
+        return None
+
+    # Caso 2: ráfaga activa sin completar
     if burst.current_id is not None or burst.current_pos is not None:
         for t in active:
             if burst.is_same_target(t):
@@ -106,7 +137,7 @@ def _pick_target_for_burst(active, burst, last_click_pos,
         else:
             burst.release()
 
-    # Caso 2: filtrar targets en cooldown
+    # Caso 3: filtrar targets en cooldown
     fresh = [
         t for t in active
         if (now - recently_shot.get(t.id, float('-inf'))) >= cooldown
@@ -179,7 +210,10 @@ def run_bot():
     debug_initialized = False
 
     # EMA del tiempo de inferencia — para lead time predictivo
-    cycle_time_ema = 0.06
+    # Valor inicial 0.010 (10ms) realista para HSV+OpenCV en CPU moderna.
+    # Antes era 0.06 (60ms) → over-predict en los primeros ~20 frames.
+    # Ahora converge sobre un valor cercano a la realidad desde el primer frame.
+    cycle_time_ema = 0.010
 
     print(f"[Bot] Iniciando — SHOTS_PER_TARGET={config.SHOTS_PER_TARGET}, "
           f"target_cooldown={config.TARGET_COOLDOWN*1000:.0f}ms")
@@ -260,6 +294,23 @@ def run_bot():
                 recently_shot, now, config.TARGET_COOLDOWN,
             )
 
+            # ═══ DIAGNOSTICO: imprime estado cada 60 frames si hay activos ═══
+            if active and (int(now * 10) % 6 == 0):
+                # Mostrar estado de cada tracker activo
+                tracker_info = []
+                for t in active[:5]:
+                    vx, vy = t.velocity
+                    speed = (vx*vx + vy*vy) ** 0.5
+                    moves = _is_moving(t)
+                    in_cd = (now - recently_shot.get(t.id, float('-inf'))) < config.TARGET_COOLDOWN
+                    tracker_info.append(
+                        f"id={t.id} pos={t.position} hits={t.hit_streak} "
+                        f"vel={speed:.0f}px/s move={moves} cd={in_cd}"
+                    )
+                print(f"[DIAG] active={len(active)} target={'SI id=' + str(target.id) if target else 'NO'}")
+                for ti in tracker_info:
+                    print(f"       {ti}")
+
             if target is not None:
                 same_target_as_burst = burst.is_same_target(target) and \
                                        (burst.current_id is not None or
@@ -270,6 +321,13 @@ def run_bot():
                 else:
                     can_shoot = (now - last_click) >= config.CLICK_DELAY
 
+                # ═══ DIAGNOSTICO: por que no dispara ═══
+                if not can_shoot:
+                    time_since_click = (now - last_click) * 1000
+                    print(f"[DIAG] NO dispara id={target.id} — can_shoot=False "
+                          f"(time_since_last_click={time_since_click:.0f}ms, "
+                          f"CLICK_DELAY={config.CLICK_DELAY*1000:.0f}ms)")
+
                 if can_shoot:
                     extra_lead_s = config.EXTRA_LEAD_MS / 1000.0
                     lead_s = cycle_time_ema + extra_lead_s
@@ -277,22 +335,41 @@ def run_bot():
                     # tx_frame, ty_frame en espacio frame (320x320)
                     tx_frame, ty_frame = target.predict_future(lead_s)
 
-                    # ─── ESCALAR A GAME ZONE para el click ────────────
-                    sx = capturer.scale_x
-                    sy = capturer.scale_y
-                    tx = int(tx_frame * sx)
-                    ty = int(ty_frame * sy)
+                    # ─── NO disparar si la prediccion cae fuera del frame ───
+                    # El pato se escapo por arriba/abajo/lados — clickear ahi
+                    # es perder un tiro. Marcamos cooldown para no insistir.
+                    frame_w = config.RESIZE_WIDTH
+                    frame_h = config.RESIZE_HEIGHT
+                    prediction_off_screen = (
+                        tx_frame < 0 or ty_frame < 0
+                        or tx_frame >= frame_w or ty_frame >= frame_h
+                    )
 
-                    # Clamp a la región real
-                    tx = max(0, min(tx, region["width"]  - 1))
-                    ty = max(0, min(ty, region["height"] - 1))
+                    if prediction_off_screen:
+                        print(f"[SKIP] id={target.id} prediccion fuera de frame "
+                              f"({tx_frame},{ty_frame}) — pato escapado, cooldown")
+                        recently_shot[target.id] = now  # entra en cooldown
+                    else:
+                        # ─── ESCALAR A GAME ZONE para el click ────────────
+                        sx = capturer.scale_x
+                        sy = capturer.scale_y
+                        tx = int(tx_frame * sx)
+                        ty = int(ty_frame * sy)
 
-                    move_and_click(tx, ty, region)
+                        # Clamp a la región real
+                        tx = max(0, min(tx, region["width"]  - 1))
+                        ty = max(0, min(ty, region["height"] - 1))
 
-                    burst.register_shot(target, now)
-                    recently_shot[target.id] = now
-                    last_click     = now
-                    last_click_pos = (tx_frame, ty_frame)  # en espacio frame
+                        # ═══ DIAGNOSTICO: log de cada click ═══
+                        print(f"[CLICK] id={target.id} frame=({tx_frame},{ty_frame}) "
+                              f"-> game=({tx},{ty}) region={region}")
+
+                        move_and_click(tx, ty, region)
+
+                        burst.register_shot(target, now)
+                        recently_shot[target.id] = now
+                        last_click     = now
+                        last_click_pos = (tx_frame, ty_frame)  # en espacio frame
 
             # ─────────────────────────────────────────────────────────
             # DEBUG

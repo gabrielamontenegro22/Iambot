@@ -1,3 +1,4 @@
+import platform
 import subprocess
 import threading
 import time
@@ -5,9 +6,34 @@ import mss
 import numpy as np
 import cv2
 
+_IS_WINDOWS = platform.system() == "Windows"
+
+if _IS_WINDOWS:
+    import pygetwindow as gw
+
 
 def get_window_geometry(window_name):
-    """Geometría completa de la ventana del SO (de wmctrl)."""
+    """Geometría completa de la ventana del SO."""
+    if _IS_WINDOWS:
+        try:
+            titles = [
+                t for t in gw.getAllTitles()
+                if t.strip() and window_name.lower() in t.lower()
+            ]
+            if not titles:
+                return None
+            matches = gw.getWindowsWithTitle(titles[0])
+            if not matches:
+                return None
+            w = matches[0]
+            if w.width <= 0 or w.height <= 0:
+                return None
+            return {"left": w.left, "top": w.top,
+                    "width": w.width, "height": w.height}
+        except Exception:
+            return None
+
+    # Linux / wmctrl
     try:
         output = subprocess.check_output(
             ["wmctrl", "-lG"], timeout=2

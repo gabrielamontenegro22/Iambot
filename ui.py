@@ -1,12 +1,24 @@
+import platform
+import subprocess
 import tkinter as tk
 from tkinter import messagebox
-import subprocess
 import config
 
 from window_capture import get_window_geometry, select_game_zone
 
+_IS_WINDOWS = platform.system() == "Windows"
+
+if _IS_WINDOWS:
+    import pygetwindow as gw
+
 
 def get_windows():
+    if _IS_WINDOWS:
+        try:
+            return [t for t in gw.getAllTitles() if t.strip()]
+        except Exception:
+            return []
+
     try:
         output = subprocess.check_output(["wmctrl", "-l"]).decode()
     except Exception:
