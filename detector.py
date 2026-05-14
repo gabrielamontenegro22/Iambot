@@ -16,10 +16,7 @@ def _detect_format(path):
     return None
 
 
-# ════════════════════════════════════════════════════════════════════
-# BACKEND 1 — YOLO (red neuronal)
-# ════════════════════════════════════════════════════════════════════
-
+# Backend YOLO (red neuronal)
 class _YoloBackend:
     def __init__(self):
         from ultralytics import YOLO
@@ -45,13 +42,12 @@ class _YoloBackend:
             names = self.model.names if hasattr(self.model, 'names') else None
             print(f"[Detector/YOLO] Clases del modelo: {names}")
             if names and len(names) > 5:
-                print(f"[Detector/YOLO] ⚠️  MODELO TIENE {len(names)} CLASES")
-                print(f"[Detector/YOLO] ⚠️  Parece COCO genérico — para sprites")
-                print(f"[Detector/YOLO] ⚠️  pixelados (Duck Hunt) usar backend 'color'.")
+                print(f"[Detector/YOLO] El modelo tiene {len(names)} clases, "
+                      f"parece COCO generico. Para Duck Hunt usar 'color'.")
         except Exception as e:
             print(f"[Detector/YOLO] No se pudieron leer clases: {e}")
 
-        # Warmup
+        # Warmup (las primeras inferencias son mas lentas)
         dummy = np.zeros((config.RESIZE_HEIGHT, config.RESIZE_WIDTH, 3),
                          dtype=np.uint8)
         print("[Detector/YOLO] Warmup...")
@@ -138,34 +134,9 @@ class _YoloBackend:
         return detections
 
 
-# ════════════════════════════════════════════════════════════════════
-# BACKEND 2 — COLOR (visión clásica)
-# ════════════════════════════════════════════════════════════════════
-
+# Backend por color (HSV + filtro de tamano/forma)
+# Para sprites del juego anda mucho mejor que YOLO generico
 class _ColorBackend:
-    """
-    Detección por color HSV + filtro de tamaño/forma.
-
-    Idea: para sprites de un juego conocido (Duck Hunt) los patos tienen
-    una paleta de colores muy específica:
-      - Pato rojo/marrón: tonos rojo-naranja saturados.
-      - Pato negro: pixeles muy oscuros, no verdosos (el árbol también es
-        oscuro pero verde).
-
-    Construimos máscaras HSV para esos rangos, las unimos, y agrupamos
-    los pixeles en bounding boxes. Filtramos por área y aspect ratio.
-
-    Salvaguarda anti-cursor: si en un mismo frame aparecen más de
-    COLOR_MAX_DETS_PER_FRAME detecciones, asumimos ruido (cambio de
-    pantalla, animación de UI, lo que sea) y NO devolvemos nada.
-    Esto evita el feedback loop donde el cursor del bot se detecta a
-    sí mismo y dispara en bucle.
-
-    Ventajas vs detección por movimiento:
-      - No se ve afectada por el cursor que mueve el propio bot.
-      - No tiene un periodo de "aprendizaje".
-      - Robusta a cambios de ronda.
-    """
 
     def __init__(self):
         self.min_area = getattr(config, "COLOR_MIN_AREA", 80)
@@ -175,20 +146,13 @@ class _ColorBackend:
         self.use_motion = getattr(config, "COLOR_USE_MOTION", False)
 
         if self.use_motion:
-            # Frame differencing: comparamos el frame actual con el anterior.
-            # Lo que cambia = movimiento. Lo estático (árbol) nunca cambia → excluido.
+            # Frame differencing: lo que cambia frame a frame = se esta moviendo.
+            # Sin esto el tronco del arbol entraba al rango de color y disparaba.
             self._prev_gray = None
-            # Kernel mas grande (15x15) — dilatacion mas generosa para cubrir
-            # toda la silueta del pato, no solo el borde donde se ve el cambio.
             self._motion_kernel = cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE, (15, 15)
             )
-            # Bajado a 3 para captar cambios MUY sutiles. El arbol sigue
-            # filtrado (no se mueve nada) pero los patos pequenos/lejanos
-            # ahora pasan.
             self._motion_threshold = 3
-            # Iteraciones de dilatacion subidas de 4 a 8 para asegurar que
-            # toda la silueta del pato quede dentro de la mascara de motion.
             self._motion_dilate_iters = 8
 
         self.red_low1  = np.array(config.COLOR_RED_LOW1,  dtype=np.uint8)
@@ -203,29 +167,26 @@ class _ColorBackend:
         self._call_count = 0
         self._log_every  = 30
 
-        print(f"[Detector/COLOR] Modo: HSV color matching")
-        print(f"[Detector/COLOR] Área válida: [{self.min_area}, {self.max_area}] px²")
-        print(f"[Detector/COLOR] Máx dets/frame: {self.max_dets} (si más, no dispara)")
+        print(f"[Detector/COLOR] Modo HSV color matching")
+        print(f"[Detector/COLOR] Area valida: [{self.min_area}, {self.max_area}] px2")
+        print(f"[Detector/COLOR] Max dets/frame: {self.max_dets}")
 
     def detect(self, frame):
         self._call_count += 1
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        # Pato rojo/marrón (dos rangos por el wrap del Hue)
+        # Pato rojo/marron, uso dos rangos por el wrap del Hue
         mask_red = cv2.inRange(hsv, self.red_low1, self.red_high1) | \
                    cv2.inRange(hsv, self.red_low2, self.red_high2)
 
-        # Pato negro/oscuro (no verdoso)
+        # Pato oscuro/gris (no verdoso, sino entraria el arbol)
         mask_dark = cv2.inRange(hsv, self.dark_low, self.dark_high)
 
         mask = mask_red | mask_dark
 
-        # Gating por movimiento via frame differencing.
-        # absdiff entre frame actual y anterior → highlight de pixeles que cambiaron.
-        # El árbol es idéntico frame a frame → 0 diff → excluido del AND.
-        # El pato cambia de posición → diff alta → INCLUIDO.
-        # Dilatamos generosamente para tolerar desalineos color/movimiento.
+        # Combino con mascara de movimiento (AND).
+        # Si el objeto no se mueve, no me importa que tenga el color.
         if self.use_motion:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if self._prev_gray is not None:
@@ -236,18 +197,15 @@ class _ColorBackend:
                 motion = cv2.dilate(motion, self._motion_kernel,
                                     iterations=self._motion_dilate_iters)
                 mask = cv2.bitwise_and(mask, motion)
-            else:
-                # Primer frame — no hay diff todavía. No gateamos.
-                pass
             self._prev_gray = gray
 
-        # Zona muerta inferior — anula la parte de abajo (perro/pasto)
+        # Ignoro la parte de abajo (perro/pasto)
         if self.ignore_bottom_frac > 0:
             h_mask = mask.shape[0]
             y_cut  = int(h_mask * (1.0 - self.ignore_bottom_frac))
             mask[y_cut:, :] = 0
 
-        # Limpieza morfológica
+        # Limpieza morfologica
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self._kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._kernel)
 
@@ -278,11 +236,12 @@ class _ColorBackend:
                 "cls":  0,
             })
 
-        # ─── SALVAGUARDA: demasiadas detecciones = ruido ──────────────
+        # Si hay demasiadas detecciones probablemente es ruido (cambio de pantalla,
+        # animacion). Mejor no disparar.
         if len(detections) > self.max_dets:
             if self._call_count % self._log_every == 0:
                 print(f"[COLOR #{self._call_count}] {len(detections)} dets "
-                      f"> {self.max_dets} → ignorado (ruido)")
+                      f"> {self.max_dets}, ignoro (ruido)")
             return []
 
         if self._call_count % self._log_every == 0:
@@ -290,19 +249,15 @@ class _ColorBackend:
             if n > 0:
                 areas = [d["w"] * d["h"] for d in detections]
                 print(f"[COLOR #{self._call_count}] {n} dets | "
-                      f"areas: [{min(areas)}-{max(areas)}] px²")
+                      f"areas: [{min(areas)}-{max(areas)}] px2")
             else:
                 print(f"[COLOR #{self._call_count}] 0 dets")
 
         return detections
 
 
-# ════════════════════════════════════════════════════════════════════
-# DISPATCHER
-# ════════════════════════════════════════════════════════════════════
-
 class Detector:
-    """Elige backend según config.DETECTOR_BACKEND ('yolo' | 'color')."""
+    # Elige el backend segun config.DETECTOR_BACKEND
 
     def __init__(self):
         backend = getattr(config, "DETECTOR_BACKEND", "yolo").lower()
