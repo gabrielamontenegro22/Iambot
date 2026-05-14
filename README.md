@@ -1,194 +1,97 @@
-# 🦆 Duck Hunt Aimbot
+# Duck Hunt Aimbot
 
-Bot autónomo que detecta y dispara automáticamente a los patos del juego
-**Duck Hunt** (versión web — CrazyGames) usando visión por computadora,
-predicción de trayectorias y control nativo del mouse.
+Proyecto para la materia de Inteligencia Artificial.
 
-Proyecto desarrollado para la materia de **Inteligencia Artificial**.
+Es un bot que juega solo al Duck Hunt en la versión web (CrazyGames). Captura la pantalla, detecta los patos, predice hacia dónde van a estar en unos milisegundos, y dispara con el mouse en ese punto.
 
----
+Llegué a ganar la partida (You Win, 7200 puntos), aunque en niveles avanzados se escapan algunos patos por límites físicos del sistema.
 
-## 🎯 Resultado
+## Cómo funciona
 
-🏆 **You Win!** con **7200 puntos** en CrazyGames Duck Hunt.
+El loop principal hace estos pasos en cada iteración:
 
-Pipeline completo de captura → detección → tracking → predicción → click
-con latencia total de ~95ms.
+1. Captura el frame del área del juego con la librería `mss`.
+2. Convierte el frame a HSV y aplica una máscara de color para aislar los patos (que son rojos/marrones o gris oscuro). Esto está en `detector.py`.
+3. Combina la máscara de color con una máscara de movimiento (diferencia entre frame actual y anterior). Sin esto el tronco del árbol y el perro daban falsos positivos.
+4. Encuentra los contornos, filtra por área y descarta los que están en la parte de abajo de la pantalla (donde está el perro cazador).
+5. Cada detección se pasa al tracker (`tracker.py`), que mantiene un filtro de Kalman por cada pato para estimar posición y velocidad. La asociación entre detecciones nuevas y trackers existentes se hace con el algoritmo Húngaro (`scipy.optimize.linear_sum_assignment`).
+6. Para disparar, no se apunta a la posición actual del pato sino a donde va a estar cuando llegue el click. Esto compensa el lag del pipeline (que mide ~95ms en total). El cálculo está en `main.py` y usa la velocidad del Kalman.
+7. El click se hace con `SendInput` de la API de Windows directamente (usando `ctypes`). Esto fue importante porque la librería `pynput` que usaba al principio tardaba ~30ms por click, y con SendInput baja a menos de 2ms. En Linux usa pynput como fallback.
 
----
-
-## 🧠 Pipeline técnico
-
-```
-┌──────────────┐   ┌─────────────┐   ┌─────────────┐   ┌──────────────┐   ┌──────────────┐
-│  Captura     │ → │  Detección  │ → │  Tracking   │ → │  Predicción  │ → │  Click       │
-│  (mss)       │   │  (HSV +     │   │  (Kalman +  │   │  (lead time) │   │  (SendInput) │
-│  ~16ms       │   │  motion)    │   │  Hungarian) │   │              │   │  <2ms        │
-└──────────────┘   └─────────────┘   └─────────────┘   └──────────────┘   └──────────────┘
-```
-
-### 1. Captura de pantalla (`window_capture.py`)
-- Librería `mss` para captura rápida del área del juego.
-- Soporte multiplataforma: `pygetwindow` en Windows, `wmctrl` en Linux.
-
-### 2. Detección de patos (`detector.py`)
-Dos backends disponibles, configurables en `config.py`:
-
-- **`color`** (usado): segmentación HSV + motion gating (frame differencing).
-  Filtra el árbol, el perro cazador y el HUD por velocidad y zona muerta.
-- **`yolo`**: red neuronal YOLOv8 (NCNN para Raspberry Pi). Disponible pero
-  no usado en CrazyGames porque los sprites pixelados confunden al modelo
-  pre-entrenado.
-
-### 3. Tracking multi-objeto (`tracker.py`)
-- Filtro de **Kalman** por cada pato (estimación de posición + velocidad).
-- Asociación de detecciones a trackers vía **algoritmo Húngaro**
-  (`scipy.optimize.linear_sum_assignment`) con costo híbrido IoU + distancia.
-- Filtros anti-explosión de IDs:
-  - `MAX_TRACKERS = 40`
-  - Filtro de velocidad mínima (descarta blobs estáticos)
-  - Cooldown por target tras disparo
-
-### 4. Predicción con lead time (`main.py`)
-El click apunta a donde el pato **estará** cuando la bala llegue, no a donde
-está ahora. Se calcula:
+## Estructura
 
 ```
-lead_time = cycle_time_ema + EXTRA_LEAD_MS
-target_x  = current_x + velocity_x * lead_time
-target_y  = current_y + velocity_y * lead_time
+app.py                # Arranca el UI y después el bot
+main.py               # Loop principal
+ui.py                 # Selector de ventana y área (Tkinter)
+detector.py           # HSV + motion gating
+tracker.py            # Kalman + Hungarian matching
+mouse_controller.py   # SendInput (Win) / pynput (Linux)
+window_capture.py     # Captura mss + busca la ventana del navegador
+learner.py            # Ajuste adaptativo del cooldown entre disparos
+config.py             # Todos los parámetros tuneables
+calibrate_hsv.py      # Herramienta para ajustar los rangos HSV
+diagnose.py           # Mide latencias sin disparar (debug)
 ```
 
-`EXTRA_LEAD_MS = 60` compensa el lag del browser + el SendInput.
+## Instalación
 
-### 5. Click nativo (`mouse_controller.py`)
-Inyección de eventos del mouse usando **Win32 API SendInput** vía `ctypes`,
-latencia de <2ms (vs ~30ms de `pynput`). Fallback automático a `pynput` en Linux.
-
----
-
-## 📦 Estructura del proyecto
+En Windows:
 
 ```
-Aimbot/
-├── app.py                # Entry point (UI + bot loop)
-├── main.py               # Loop principal del bot
-├── ui.py                 # Selector de ventana + área de juego (Tkinter)
-├── detector.py           # HSV + motion gating + YOLO opcional
-├── tracker.py            # Kalman + Hungarian matching multi-objeto
-├── mouse_controller.py   # Click nativo Win32 SendInput / pynput fallback
-├── window_capture.py     # Captura mss + búsqueda de ventana del navegador
-├── learner.py            # Sistema adaptativo (ajusta TARGET_COOLDOWN)
-├── utils.py              # Helpers
-├── config.py             # ⚙️ TODA la configuración tunable
-├── calibrate_hsv.py      # Herramienta interactiva para calibrar colores HSV
-├── diagnose.py           # Diagnóstico (mide latencia y FPS sin disparar)
-├── models/               # Modelo YOLO custom exportado a NCNN
-└── requirements.txt
-```
-
----
-
-## 🚀 Instalación
-
-### Windows
-
-```bash
-git clone https://github.com/gabrielamontenegro22/Iambot.git
-cd Iambot
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 python app.py
 ```
 
-### Linux (Ubuntu / Raspberry Pi)
+En Linux (probado en Ubuntu, debería funcionar en Raspberry):
 
-```bash
-sudo apt install -y python3-pip python3-venv python3-tk wmctrl xdotool
-git clone https://github.com/gabrielamontenegro22/Iambot.git
-cd Iambot
+```
+sudo apt install python3-tk wmctrl xdotool
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 python3 app.py
 ```
 
-> ⚠️ **Linux con Wayland:** la captura y el listado de ventanas requieren
-> sesión **Xorg**. Si estás en Wayland, editá `/etc/gdm3/custom.conf` y
-> agregá `WaylandEnable=false` debajo de `[daemon]`, luego reiniciá.
+Si estás en Linux con Wayland, la captura y el listado de ventanas no funciona, hay que cambiar a sesión Xorg. Para forzarlo, agregar `WaylandEnable=false` en `/etc/gdm3/custom.conf` debajo de `[daemon]` y reiniciar.
 
----
+## Cómo se usa
 
-## ⚙️ Uso
+1. Abrir Duck Hunt en el navegador (mejor en pantalla completa con F11).
+2. Correr `python app.py`.
+3. En la ventana del bot, dar "Actualizar lista" y seleccionar la ventana del navegador.
+4. Apretar "Seleccionar área de juego" y dibujar un rectángulo sobre la zona donde vuelan los patos.
+5. Iniciar.
 
-1. Abrí Duck Hunt en el navegador (recomendado: pantalla completa F11).
-2. Ejecutá `python app.py`.
-3. En la ventana **Vision Bot**:
-   - **Actualizar lista** → seleccioná la ventana del navegador.
-   - **Seleccionar área de juego** → dibujá un rectángulo sobre el área donde
-     vuelan los patos.
-   - **▶ INICIAR**.
-4. Para detener, cerrá la ventana o presioná `Ctrl+C` en la terminal.
+## Parámetros importantes
 
----
+Están en `config.py`. Los que más afectan el resultado:
 
-## 🔧 Tuning rápido
+- `DETECTOR_BACKEND` está en `"color"`. Probé también con YOLO pero el modelo genérico (yolov8n) no funciona bien con sprites pixelados.
+- `CLICK_DELAY = 0.30`. Es el tiempo entre clicks a distintos patos. Más bajo no anduvo porque CrazyGames parece filtrar clicks demasiado rápidos (como anti-autoclicker).
+- `SHOTS_PER_TARGET = 1`. Mismo motivo: probé con ráfagas de 3 disparos y mataba menos.
+- `EXTRA_LEAD_MS = 60`. Cuánto se adelanta el click a la trayectoria del pato.
+- `COLOR_USE_MOTION = True`. Combina el filtro de color con el de movimiento.
+- `COLOR_IGNORE_BOTTOM_FRAC = 0.30`. Ignora el 30% inferior del frame para no dispararle al perro.
+- `MIN_VELOCITY_PX_S = 35`. Velocidad mínima para considerar válido un target.
 
-Los parámetros más importantes están en `config.py`:
+Si querés recalibrar los colores en otra pantalla con `python calibrate_hsv.py` se abre una ventana con sliders y vas ajustando hasta que solo los patos aparezcan en blanco en la máscara.
 
-| Parámetro | Valor | Efecto |
-|---|---|---|
-| `DETECTOR_BACKEND` | `"color"` | `"color"` para sprites pixelados; `"yolo"` para gráficos realistas |
-| `CLICK_DELAY` | `0.30` | Tiempo entre clicks. Más bajo = más rápido (pero CrazyGames filtra <0.25) |
-| `SHOTS_PER_TARGET` | `1` | Disparos por pato. CrazyGames filtra ráfagas como autoclicker |
-| `EXTRA_LEAD_MS` | `60` | Anticipación. Si los clicks caen atrás del pato, subir |
-| `COLOR_USE_MOTION` | `True` | Combinar HSV con detección de movimiento (filtra árbol estático) |
-| `COLOR_IGNORE_BOTTOM_FRAC` | `0.30` | Ignora 30% inferior (perro cazador + pasto + HUD) |
-| `MIN_VELOCITY_PX_S` | `35` | Velocidad mínima para considerar un target (filtra HUD estático) |
-| `TARGET_COOLDOWN` | `0.5s` | Tiempo antes de re-tirarle al mismo pato |
+## Librerías usadas
 
-Para calibrar los colores HSV en una pantalla nueva:
-```bash
-python calibrate_hsv.py
-```
+- OpenCV (procesamiento de imagen)
+- NumPy (Kalman, álgebra)
+- SciPy (Hungarian matching)
+- mss (captura de pantalla)
+- Ultralytics + NCNN (modelo YOLO opcional)
+- Tkinter (UI)
+- pynput (mouse en Linux)
+- ctypes (Win32 SendInput)
 
----
+## Notas
 
-## 📊 Stack tecnológico
-
-- **Python 3.10+**
-- **OpenCV** — procesamiento de imágenes, HSV, motion detection
-- **NumPy** — álgebra lineal (Kalman)
-- **SciPy** — algoritmo Húngaro para asociación de targets
-- **mss** — captura de pantalla rápida
-- **Ultralytics YOLO** + **NCNN** — modelo opcional para detección por red
-- **ctypes** — Win32 API SendInput
-- **Tkinter** — UI del selector de ventana/área
-- **pynput** — fallback de mouse en Linux
-
----
-
-## 🧪 Optimizaciones aplicadas
-
-| # | Optimización | Impacto |
-|---|---|---|
-| 1 | SendInput nativo (vs `pynput`) | -28ms de latencia de click |
-| 2 | Motion gating combinado con HSV | Eliminó falsos positivos del árbol y perro |
-| 3 | Zona muerta inferior (30%) | Ignora perro cazador y HUD |
-| 4 | Filtro de velocidad mínima | Ignora blobs estáticos (HUD, ramas) |
-| 5 | Predict-skip si target sale de pantalla | Evita clicks en coordenadas fuera del juego |
-| 6 | Lead time adaptativo | Compensa el lag del pipeline (~95ms total) |
-| 7 | Cooldown por target ID | Rota entre patos en vez de spamear al mismo |
-
----
-
-## 📝 Licencia
-
-Proyecto académico — uso educativo.
-
----
-
-## 👤 Autora
-
-**Gabriela Montenegro** — Proyecto de la materia *Inteligencia Artificial*.
+- El proyecto está pensado para correr eventualmente en una Raspberry Pi, por eso se incluyó la opción del modelo NCNN (que es ~3x más rápido en ARM que PyTorch puro).
+- El `learner.py` tiene un sistema que ajusta automáticamente el cooldown entre disparos según la tasa de aciertos, pero está más como prueba de concepto que como mejora real.
+- Algunos patos siempre se van a escapar: el pipeline total tarda ~95ms y a velocidades de 200 px/s eso significa que el pato cruzó casi 20 px entre que lo detecté y le disparé. Si el lead predice mal, lo pierdo.
