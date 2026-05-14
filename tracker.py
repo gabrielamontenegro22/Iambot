@@ -34,7 +34,7 @@ class KalmanTracker:
         self.R = np.eye(2, dtype=np.float32) * 0.5
 
     def predict(self, dt):
-        """Avanza el estado dt segundos en el futuro."""
+        # Avanza el estado dt segundos en el futuro
         F = np.array([
             [1, 0, dt, 0],
             [0, 1, 0,  dt],
@@ -62,7 +62,7 @@ class KalmanTracker:
         self.confirmed    = True
 
     def predict_future(self, lead_seconds):
-        """(x, y) extrapolado sin modificar estado interno."""
+        # Devuelve (x, y) extrapolado sin tocar el estado
         cx, cy, vx, vy = self.state
         return (int(cx + vx * lead_seconds),
                 int(cy + vy * lead_seconds))
@@ -82,10 +82,6 @@ class KalmanTracker:
         return (float(self.state[2]), float(self.state[3]))
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Cost functions
-# ═══════════════════════════════════════════════════════════════════
-
 def _iou(b1, b2):
     ix1 = max(b1[0], b2[0]);  iy1 = max(b1[1], b2[1])
     ix2 = min(b1[2], b2[2]);  iy2 = min(b1[3], b2[3])
@@ -99,7 +95,7 @@ def _iou(b1, b2):
 
 
 def _hybrid_cost(t_bbox, t_pos, d, max_dist=250.0, alpha=0.4):
-    """Combined cost = alpha*(1-IoU) + (1-alpha)*norm_distance"""
+    # Combino IoU y distancia normalizada (asocia mejor que con uno solo)
     iou    = _iou(t_bbox, (
         d['x'] - d['w'] // 2, d['y'] - d['h'] // 2,
         d['x'] + d['w'] // 2, d['y'] + d['h'] // 2,
@@ -109,19 +105,8 @@ def _hybrid_cost(t_bbox, t_pos, d, max_dist=250.0, alpha=0.4):
     return alpha * (1.0 - iou) + (1.0 - alpha) * dist_n
 
 
-# ═══════════════════════════════════════════════════════════════════
-# MultiTracker
-# ═══════════════════════════════════════════════════════════════════
-
 class MultiTracker:
-    """
-    Predict en cada iteración del loop (con dt real), update solo cuando
-    llegan detecciones nuevas.
-
-    Salvaguardas anti-explosión de IDs:
-      - MAX_TRACKERS: límite duro de trackers simultáneos.
-      - Warning si se llega al límite (suele indicar bboxes en escala mala).
-    """
+    # Predict en cada iteracion del loop, update solo cuando hay deteccion nueva.
 
     def __init__(self, iou_threshold=0.25, max_dist=250, max_lost=8):
         self.trackers      = []
@@ -138,10 +123,8 @@ class MultiTracker:
         if not detections:
             for t in self.trackers:
                 t.lost_frames += 1
-                # NO resetear hit_streak — preservamos el conteo de detecciones
-                # historicas para que el filtro de velocidad pueda aplicar.
-                # Antes: t.hit_streak = 0 → blobs estaticos quedaban en hits=0
-                # siempre, bypaseando HIT_STREAK_GRACE.
+                # No reseteo hit_streak aca, sino los blobs estaticos pierden
+                # el conteo y se cuelan en el filtro de velocidad.
             self._prune()
             return self.active_targets()
 
@@ -149,7 +132,6 @@ class MultiTracker:
             self._add_new_trackers(detections)
             return self.active_targets()
 
-        # Hybrid cost matrix
         cost = np.zeros(
             (len(self.trackers), len(detections)), dtype=np.float32
         )
@@ -178,7 +160,6 @@ class MultiTracker:
         for i, t in enumerate(self.trackers):
             if i not in matched_t:
                 t.lost_frames += 1
-                # NO resetear hit_streak — ver comentario en bloque superior.
 
         unmatched_detections = [
             detections[j] for j in range(len(detections))
@@ -190,13 +171,11 @@ class MultiTracker:
         return self.active_targets()
 
     def _add_new_trackers(self, detections):
-        """Crea trackers nuevos respetando MAX_TRACKERS."""
+        # Si llega al limite suele ser que los bboxes vienen en escala mala
         room = MAX_TRACKERS - len(self.trackers)
         if room <= 0:
             if not self._warned_limit:
-                print(f"[Tracker] ⚠️  Alcanzado MAX_TRACKERS={MAX_TRACKERS}. "
-                      f"Esto suele indicar bboxes en escala incorrecta — "
-                      f"el matching falla y todo se crea como nuevo.")
+                print(f"[Tracker] Llegamos al limite MAX_TRACKERS={MAX_TRACKERS}")
                 self._warned_limit = True
             return
 
